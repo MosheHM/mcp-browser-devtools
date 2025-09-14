@@ -1,5 +1,6 @@
 import puppeteer, { Browser, Page } from 'puppeteer';
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { SecurityValidator, MemoryManager, RateLimiter, TimeoutManager } from '../utils/security.js';
 
 export interface ConsoleMessage {
   type: 'log' | 'warn' | 'error' | 'info' | 'debug';
@@ -15,6 +16,8 @@ export class ConsoleMonitor {
   private page: Page | null = null;
   private consoleMessages: ConsoleMessage[] = [];
   private isMonitoring = false;
+  private readonly MAX_CONSOLE_MESSAGES = 1000;
+  private readonly SCRIPT_TIMEOUT_MS = 30000;
 
   getTools(): Tool[] {
     return [
@@ -109,24 +112,47 @@ export class ConsoleMonitor {
 
   private async startMonitoring(url: string, headless: boolean): Promise<any> {
     try {
+      // Validate URL
+      const urlValidation = SecurityValidator.validateUrl(url);
+      if (!urlValidation.isValid) {
+        throw new Error(`Invalid URL: ${urlValidation.error}`);
+      }
+
+      // Rate limiting
+      if (!RateLimiter.checkRateLimit(`console_monitor_${url}`, 10, 60000)) {
+        throw new Error('Rate limit exceeded for console monitoring');
+      }
+
       if (this.isMonitoring) {
         await this.stopMonitoring();
       }
 
       this.browser = await puppeteer.launch({
-        headless,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        headless: headless === false ? false : 'new', // Use new headless mode
+        args: [
+          '--no-sandbox', 
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-web-security',
+          '--disable-features=VizDisplayCompositor'
+        ],
+        timeout: 30000, // 30 second timeout
       });
 
       this.page = await this.browser.newPage();
+      
+      // Set page timeout
+      this.page.setDefaultTimeout(30000);
+      this.page.setDefaultNavigationTimeout(30000);
+
       this.consoleMessages = [];
       this.isMonitoring = true;
 
-      // Listen for console events
+      // Listen for console events with memory management
       this.page.on('console', (msg) => {
         const consoleMessage: ConsoleMessage = {
           type: msg.type() as ConsoleMessage['type'],
-          message: msg.text(),
+          message: msg.text().substring(0, 1000), // Limit message length
           timestamp: Date.now(),
         };
 
@@ -139,19 +165,34 @@ export class ConsoleMonitor {
         }
 
         this.consoleMessages.push(consoleMessage);
+        
+        // Apply memory management
+        this.consoleMessages = MemoryManager.limitArraySize(
+          this.consoleMessages, 
+          this.MAX_CONSOLE_MESSAGES
+        );
       });
 
       // Listen for page errors
       this.page.on('pageerror', (error) => {
         this.consoleMessages.push({
           type: 'error',
-          message: error.message,
+          message: error.message.substring(0, 1000), // Limit error message length
           timestamp: Date.now(),
         });
+
+        // Apply memory management
+        this.consoleMessages = MemoryManager.limitArraySize(
+          this.consoleMessages, 
+          this.MAX_CONSOLE_MESSAGES
+        );
       });
 
-      // Navigate to the URL
-      await this.page.goto(url, { waitUntil: 'networkidle0' });
+      // Navigate to the URL with timeout
+      await this.page.goto(urlValidation.sanitized!, { 
+        waitUntil: 'networkidle0',
+        timeout: 30000
+      });
 
       return {
         content: [
@@ -162,19 +203,36 @@ export class ConsoleMonitor {
         ],
       };
     } catch (error) {
+      // Clean up on error
+      if (this.browser) {
+        try {
+          await this.browser.close();
+        } catch (cleanupError) {
+          // Ignore cleanup errors
+        }
+        this.browser = null;
+        this.page = null;
+        this.isMonitoring = false;
+      }
       throw new Error(`Failed to start console monitoring: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
   private getMessages(type: string, limit: number): any {
+    // Validate and sanitize inputs
+    const sanitizedLimit = SecurityValidator.validateNumericLimit(limit, 1, 10000);
     let messages = this.consoleMessages;
 
     if (type !== 'all') {
+      const validTypes = ['log', 'warn', 'error', 'info', 'debug'];
+      if (!validTypes.includes(type)) {
+        throw new Error(`Invalid message type: ${type}`);
+      }
       messages = messages.filter((msg) => msg.type === type);
     }
 
     // Get the most recent messages
-    messages = messages.slice(-limit);
+    messages = messages.slice(-sanitizedLimit);
 
     return {
       content: [
@@ -185,6 +243,10 @@ export class ConsoleMonitor {
             filteredMessages: messages.length,
             messages: messages,
             isMonitoring: this.isMonitoring,
+            memoryUsage: {
+              totalItems: this.consoleMessages.length,
+              maxItems: this.MAX_CONSOLE_MESSAGES,
+            },
           }, null, 2),
         },
       ],
@@ -207,6 +269,9 @@ export class ConsoleMonitor {
 
   private async stopMonitoring(): Promise<any> {
     try {
+      // Clear any timeouts
+      TimeoutManager.clearAllTimeouts();
+      
       if (this.browser) {
         await this.browser.close();
         this.browser = null;
@@ -223,6 +288,10 @@ export class ConsoleMonitor {
         ],
       };
     } catch (error) {
+      // Force cleanup even if there's an error
+      this.browser = null;
+      this.page = null;
+      this.isMonitoring = false;
       throw new Error(`Failed to stop console monitoring: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -232,11 +301,27 @@ export class ConsoleMonitor {
       throw new Error('Console monitoring is not active. Start monitoring first.');
     }
 
+    // Validate script
+    const scriptValidation = SecurityValidator.validateScript(script);
+    if (!scriptValidation.isValid) {
+      throw new Error(`Invalid script: ${scriptValidation.error}`);
+    }
+
+    // Rate limiting for script execution
+    if (!RateLimiter.checkRateLimit('script_execution', 20, 60000)) {
+      throw new Error('Rate limit exceeded for script execution');
+    }
+
     try {
       const messagesBefore = this.consoleMessages.length;
       
-      // Execute the script
-      const result = await this.page.evaluate(script);
+      // Execute the script with timeout
+      const result = await Promise.race([
+        this.page.evaluate(scriptValidation.sanitized!),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Script execution timeout')), this.SCRIPT_TIMEOUT_MS)
+        )
+      ]);
       
       // Wait a bit for console messages to be captured
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -251,6 +336,7 @@ export class ConsoleMonitor {
               scriptResult: result,
               newConsoleMessages: newMessages,
               totalMessages: this.consoleMessages.length,
+              executionTime: Date.now(),
             }, null, 2),
           },
         ],
