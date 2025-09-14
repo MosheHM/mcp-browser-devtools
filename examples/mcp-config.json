@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "browser-devtools": {
+      "command": "node",
+      "args": ["dist/index.js"],
+      "cwd": "/path/to/mcp-browser-devtools"
+    }
+  }
+}
