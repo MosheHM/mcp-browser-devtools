@@ -1,5 +1,6 @@
 import puppeteer, { Browser, Page, HTTPRequest, HTTPResponse } from 'puppeteer';
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { SecurityValidator, MemoryManager, RateLimiter, TimeoutManager } from '../utils/security';
 
 export interface NetworkRequest {
   id: string;
@@ -43,6 +44,9 @@ export class NetworkMonitor {
   };
   private isMonitoring = false;
   private requestTimestamps = new Map<string, number>();
+  private readonly MAX_NETWORK_ITEMS = 1000;
+  private readonly MAX_REQUEST_SIZE = 1024 * 1024; // 1MB
+  private readonly SENSITIVE_HEADERS = ['authorization', 'cookie', 'x-api-key', 'x-auth-token'];
 
   getTools(): Tool[] {
     return [

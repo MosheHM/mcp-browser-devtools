@@ -6,7 +6,7 @@ export class SecurityValidator {
   private static readonly MAX_SCRIPT_LENGTH = 10000;
   private static readonly MAX_FILENAME_LENGTH = 255;
   private static readonly BLOCKED_EXTENSIONS = ['.exe', '.bat', '.cmd', '.scr', '.pif', '.msi'];
-  private static readonly DANGEROUS_PATHS = ['/etc/', '/proc/', '/sys/', '/root', '/home/', 'C:\\Windows', 'C:\\System32'];
+  private static readonly DANGEROUS_PATHS = ['/etc/', '/proc/', '/sys/', '/root/', '/home/', 'c:/windows', 'c:/system32'];
 
   /**
    * Validates and sanitizes URLs for security
@@ -84,11 +84,11 @@ export class SecurityValidator {
       return { isValid: false, error: 'File path must be a non-empty string' };
     }
 
-    // Normalize path
-    const normalizedPath = filePath.replace(/\\/g, '/').replace(/\/+/g, '/');
+    // Normalize path and convert to lowercase for comparison
+    const normalizedPath = filePath.replace(/\\/g, '/').replace(/\/+/g, '/').toLowerCase();
 
     // Check for path traversal
-    if (normalizedPath.includes('../') || normalizedPath.includes('..\\')) {
+    if (normalizedPath.includes('../') || filePath.includes('..\\')) {
       return { isValid: false, error: 'Path traversal is not allowed' };
     }
 
@@ -97,7 +97,7 @@ export class SecurityValidator {
       return { isValid: false, error: 'Access to system directories is not allowed' };
     }
 
-    return { isValid: true, sanitized: normalizedPath };
+    return { isValid: true, sanitized: filePath.replace(/\\/g, '/').replace(/\/+/g, '/') };
   }
 
   /**
@@ -112,6 +112,11 @@ export class SecurityValidator {
       return { isValid: false, error: 'Filename exceeds maximum length' };
     }
 
+    // Check for dangerous characters before sanitization
+    if (/[<>:"/\\|?*\x00-\x1f]/.test(filename)) {
+      return { isValid: false, error: 'Filename contains dangerous characters' };
+    }
+
     // Remove dangerous characters
     const sanitized = filename.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
 
@@ -122,8 +127,9 @@ export class SecurityValidator {
     }
 
     // Prevent reserved filenames on Windows
+    const nameWithoutExt = sanitized.substring(0, sanitized.lastIndexOf('.')) || sanitized;
     const reservedNames = ['CON', 'PRN', 'AUX', 'NUL', 'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9', 'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'];
-    if (reservedNames.includes(sanitized.toUpperCase())) {
+    if (reservedNames.includes(nameWithoutExt.toUpperCase())) {
       return { isValid: false, error: 'Reserved filename is not allowed' };
     }
 

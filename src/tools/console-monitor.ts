@@ -1,6 +1,6 @@
 import puppeteer, { Browser, Page } from 'puppeteer';
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
-import { SecurityValidator, MemoryManager, RateLimiter, TimeoutManager } from '../utils/security.js';
+import { SecurityValidator, MemoryManager, RateLimiter, TimeoutManager } from '../utils/security';
 
 export interface ConsoleMessage {
   type: 'log' | 'warn' | 'error' | 'info' | 'debug';
