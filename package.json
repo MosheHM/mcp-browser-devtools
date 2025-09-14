@@ -1,0 +1,13 @@
+{
+  "name": "mcp-browser-devtools",
+  "version": "1.0.0",
+  "description": "MCP server for connecting to browser dev tools via CDP",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.4.0",
+    "chrome-remote-interface": "^0.33.0"
+  }
+}
